@@ -163,7 +163,7 @@ const SYMBOL_TYPES = {
 };
 
 const ARTIFACTS = [
-  { id: 'dazzling', name: '眼花缭乱', type: 'artifact', icon: <Stars size={24} />, desc: '特殊排列计分时效果翻倍', price: 25 },
+  { id: 'dazzling', name: '眼花缭乱', type: 'artifact', icon: <Stars size={24} />, desc: '每次连携额外 +0.25 番', price: 25 },
   { id: 'magic_box', name: '魔力宝匣', type: 'artifact', icon: <Archive size={24} />, desc: '奖池每有1张牌，计分时+2倍率', price: 20, 
     effect: (ctx, data, count, deckLength) => {
       ctx.mult += deckLength * 2;
@@ -179,7 +179,7 @@ const ARTIFACTS = [
     }
   },
   { id: 'angle_grinder', name: '角磨机', type: 'artifact', icon: <Disc size={24} />, desc: '所有宝石提供额外 +1 倍率', price: 15 },
-  { id: 'missing_heart', name: '缺心眼儿', type: 'artifact', icon: <HeartCrack size={24} />, desc: '缺心十字计分时 +55x 倍率', price: 20 },
+  { id: 'missing_heart', name: '缺心眼儿', type: 'artifact', icon: <HeartCrack size={24} />, desc: '缺心十字计分时额外 +2 番', price: 20 },
   { id: 'blue_green_blind', name: '蓝绿色盲', type: 'artifact', icon: <ScanEye size={24} />, desc: '蓝宝石和祖母绿可以互相连携', price: 20 },
   { id: 'old_eyes', name: '老眼昏花', type: 'artifact', icon: <Glasses size={24} />, desc: '将原石和金币卡视为宝石', price: 30 },
   { id: 'pink_promise', name: '粉红之约', type: 'artifact', icon: <Heart size={24} className="text-pink-400"/>, desc: '当老虎机中有塔菲石，结算时总分 x2', price: 30 },
@@ -207,6 +207,13 @@ const ARTIFACTS = [
       ctx.mult += bonus; 
       return `聚焦 (+${bonus}x)`; 
     } 
+  },
+  { id: 'three_goats', name: '三羊开泰', type: 'artifact', icon: <Swords size={24} className="text-amber-300"/>, desc: '横向三连、纵向同花、对角连击每触发一次永久 +0.05 番，结算时加入当前成长番数', price: 28, isGrowth: true, growthType: 'fan',
+    effect: (ctx, data) => {
+      const bonus = data?.growth || 0;
+      ctx.fan += bonus;
+      return `三羊开泰 (+${formatNum(bonus)}番)`;
+    }
   },
   { id: 'polisher', name: '抛光布', type: 'artifact', icon: <Brush size={24} />, desc: '所有宝石 +10 筹码', price: 25, effect: (ctx) => { ctx.gemChipBonus += 10; return '抛光加成'; } },
   { id: 'hammer', name: '地质锤', type: 'artifact', icon: <Hammer size={24} />, desc: '原石现在提供 10 筹码', price: 15 },
@@ -248,6 +255,12 @@ const INITIAL_DECK = [
   'rock', 'rock', 'rock', 'rock'
 ];
 
+const calcTotal = (chips, mult, fan) => Math.floor(chips * Math.max(1, mult) * Math.max(1, fan));
+const formatNum = (value) => {
+  if (Number.isInteger(value)) return value;
+  return Number.isInteger(value * 10) ? value.toFixed(1) : value.toFixed(2);
+};
+
 function App() {
   const [deck, setDeck] = useState(INITIAL_DECK);
   const [artifacts, setArtifacts] = useState([]); 
@@ -287,13 +300,17 @@ function App() {
   const [notification, setNotification] = useState(null);
   const [summaryPage, setSummaryPage] = useState(0); 
   
-  const [handResult, setHandResult] = useState({ chips: 0, mult: 0, total: 0, gold: 0 });
+  const [handResult, setHandResult] = useState({ chips: 0, mult: 0, fan: 1, total: 0, gold: 0 });
   const [scoringQueue, setScoringQueue] = useState([]); 
   const [currentAnimEvent, setCurrentAnimEvent] = useState(null); 
   const [shopItems, setShopItems] = useState([]);
   const [goldPop, setGoldPop] = useState(false);
 
   const [swapSourceIndex, setSwapSourceIndex] = useState(null);
+
+  const [animSpeed, setAnimSpeed] = useState(1);
+  const animSpeedRef = useRef(1);
+  const [autoSpin, setAutoSpin] = useState(false);
 
   const showToast = (msg, type = 'info') => {
     setNotification({ msg, type, id: Date.now() });
@@ -321,46 +338,58 @@ function App() {
       } else if (nextEvent.type === 'artifact') {
          playSound('artifact_trigger');
       } else if (nextEvent.type === 'multiplier') {
-         playSound('multiplier'); 
+         playSound('multiplier');
       }
 
       if (nextEvent.type === 'card' || nextEvent.type === 'artifact') {
         const addedGold = nextEvent.addGold || 0;
         if (addedGold > 0) {
            setGoldPop(true);
-           setTimeout(() => setGoldPop(false), 200);
+           setTimeout(() => setGoldPop(false), 200 / animSpeed);
         }
 
         setHandResult(prev => ({
           ...prev,
           chips: prev.chips + (nextEvent.addChips || 0),
           mult: prev.mult + (nextEvent.addMult || 0),
+          fan: prev.fan + (nextEvent.addFan || 0),
           gold: prev.gold + addedGold,
-          total: Math.floor((prev.chips + (nextEvent.addChips || 0)) * Math.max(1, prev.mult + (nextEvent.addMult || 0)))
+          total: calcTotal(
+            prev.chips + (nextEvent.addChips || 0),
+            prev.mult + (nextEvent.addMult || 0),
+            prev.fan + (nextEvent.addFan || 0)
+          )
         }));
       } else if (nextEvent.type === 'multiplier') {
          setHandResult(prev => {
              const newMult = Math.floor(prev.mult * nextEvent.factor);
-             return { ...prev, mult: newMult, total: Math.floor(prev.chips * newMult) };
+             return { ...prev, mult: newMult, total: calcTotal(prev.chips, newMult, prev.fan) };
          });
       } else if (nextEvent.type === 'synergy') {
          setHandResult(prev => {
-             const newMult = prev.mult + nextEvent.addMult;
-             return { ...prev, mult: newMult, total: Math.floor(prev.chips * newMult) };
+             const newFan = prev.fan + nextEvent.addFan;
+             return { ...prev, fan: newFan, total: calcTotal(prev.chips, prev.mult, newFan) };
          });
       }
 
-      const delay = nextEvent.type === 'synergy' ? 1200 : 300; 
+      const delay = nextEvent.type === 'synergy' ? 1200 / animSpeed : 300 / animSpeed;
       setTimeout(() => {
         setCurrentAnimEvent(null);
       }, delay);
-    } 
+    }
     else if (gameState === 'SCORING' && scoringQueue.length === 0 && !currentAnimEvent) {
       setTimeout(() => {
           resolveRound();
-      }, 800);
+      }, 800 / animSpeed);
     }
-  }, [scoringQueue, currentAnimEvent, gameState]);
+  }, [scoringQueue, currentAnimEvent, gameState, animSpeed]);
+
+  useEffect(() => {
+    if (autoSpin && gameState === 'IDLE' && spinsLeft > 0 && !magicMode) {
+      const t = setTimeout(() => spin(), 100 / animSpeedRef.current);
+      return () => clearTimeout(t);
+    }
+  }, [autoSpin, gameState, spinsLeft, magicMode]);
 
   // --- 核心逻辑 ---
 
@@ -372,7 +401,7 @@ function App() {
     setSpinsLeft(prev => prev - 1);
     setGameStats(prev => ({ ...prev, totalHands: prev.totalHands + 1 }));
     setGameState('SPINNING');
-    setHandResult({ chips: 0, mult: 0, total: 0, gold: 0 });
+    setHandResult({ chips: 0, mult: 0, fan: 1, total: 0, gold: 0 });
     
     setArtifacts(prev => prev.map(a => {
       if (a.id === 'lens') {
@@ -387,30 +416,31 @@ function App() {
     });
 
     let ticks = 0;
-    const stopTicks = [6, 12, 18]; 
+    const stopTicks = [6, 12, 18];
+    const spd = animSpeedRef.current;
     const interval = setInterval(() => {
       ticks++;
-      playSound('tick'); 
+      playSound('tick');
       setGrid(prevGrid => {
         const current = prevGrid[0] ? [...prevGrid] : Array(9).fill(null);
         return current.map((cell, i) => {
-          const col = i % 3; 
+          const col = i % 3;
           if (ticks < stopTicks[col]) {
              const randomKey = deck[Math.floor(Math.random() * deck.length)];
              return { ...SYMBOL_TYPES[randomKey.toUpperCase()], uid: Math.random(), isBlur: true };
           } else if (ticks === stopTicks[col]) {
              return { ...finalGrid[i], isBlur: false, isLanding: true };
           } else {
-             return { ...finalGrid[i], isBlur: false, isLanding: false }; 
+             return { ...finalGrid[i], isBlur: false, isLanding: false };
           }
         });
       });
 
-      if (ticks > stopTicks[2] + 4) { 
+      if (ticks > stopTicks[2] + 4) {
         clearInterval(interval);
-        setTimeout(() => prepareScoreQueue(finalGrid), 200);
+        setTimeout(() => prepareScoreQueue(finalGrid), 200 / spd);
       }
-    }, 60);
+    }, Math.max(10, 60 / spd));
   };
 
   const prepareScoreQueue = (finalGrid) => {
@@ -419,7 +449,7 @@ function App() {
     
     const currentArtifacts = artifactsRef.current;
 
-    const context = { grid: finalGrid, chips: 0, mult: 0, gemChipBonus: 0, goldCardChipBonus: 0 };
+    const context = { grid: finalGrid, chips: 0, mult: 0, fan: 0, gemChipBonus: 0, goldCardChipBonus: 0 };
     
     const hasHammer = currentArtifacts.some(a => a.id === 'hammer'); 
     const hasShinyGold = currentArtifacts.some(a => a.id === 'shiny_gold');
@@ -503,33 +533,37 @@ function App() {
     };
 
     const patterns = [
-      { indices: [0,1,2], mult: 7, name: '横向三连' },
-      { indices: [3,4,5], mult: 7, name: '横向三连' },
-      { indices: [6,7,8], mult: 7, name: '横向三连' },
-      { indices: [0,3,6], mult: 7, name: '纵向同花' },
-      { indices: [1,4,7], mult: 7, name: '纵向同花' },
-      { indices: [2,5,8], mult: 7, name: '纵向同花' },
-      { indices: [0,4,8], mult: 8, name: '对角连击' },
-      { indices: [2,4,6], mult: 8, name: '对角连击' },
-      { indices: [0,1,3,4], mult: 10, name: '四方连结' },
-      { indices: [1,2,4,5], mult: 10, name: '四方连结' },
-      { indices: [3,4,6,7], mult: 10, name: '四方连结' },
-      { indices: [4,5,7,8], mult: 10, name: '四方连结' },
-      { indices: [0,2,6,8], mult: 15, name: '四角同辉' },
-      { indices: [1,3,5,7], mult: 15, name: '缺心十字' }
+      { indices: [0,1,2], fan: 1, name: '横向三连', isThreeGem: true },
+      { indices: [3,4,5], fan: 1, name: '横向三连', isThreeGem: true },
+      { indices: [6,7,8], fan: 1, name: '横向三连', isThreeGem: true },
+      { indices: [0,3,6], fan: 1, name: '纵向同花', isThreeGem: true },
+      { indices: [1,4,7], fan: 1, name: '纵向同花', isThreeGem: true },
+      { indices: [2,5,8], fan: 1, name: '纵向同花', isThreeGem: true },
+      { indices: [0,4,8], fan: 1.5, name: '对角连击', isThreeGem: true },
+      { indices: [2,4,6], fan: 1.5, name: '对角连击', isThreeGem: true },
+      { indices: [0,1,3,4], fan: 2, name: '四方连结' },
+      { indices: [1,2,4,5], fan: 2, name: '四方连结' },
+      { indices: [3,4,6,7], fan: 2, name: '四方连结' },
+      { indices: [4,5,7,8], fan: 2, name: '四方连结' },
+      { indices: [0,2,6,8], fan: 4, name: '四角同辉' },
+      { indices: [1,3,5,7], fan: 3, name: '缺心十字' }
     ];
 
+    let threeGoatsGrowthGain = 0;
     patterns.forEach(p => {
        const symbols = p.indices.map(i => finalGrid[i]);
        if (getSynergyType(symbols)) {
-          queue.push({ type: 'synergy', indices: p.indices, addMult: p.mult, name: p.name });
+          queue.push({ type: 'synergy', indices: p.indices, addFan: p.fan, name: p.name });
+          if (p.isThreeGem && symbols.every(s => isGem(s))) {
+             threeGoatsGrowthGain += 0.05;
+          }
           
           currentArtifacts.forEach(art => {
              if (art.id === 'dazzling') {
                 queue.push({ 
                    type: 'artifact', 
                    id: art.id, 
-                   addMult: p.mult, 
+                   addFan: 0.25,
                    name: '眼花缭乱' 
                 });
              }
@@ -537,13 +571,24 @@ function App() {
                 queue.push({ 
                    type: 'artifact', 
                    id: art.id, 
-                   addMult: 55, 
+                   addFan: 2,
                    name: '缺心眼儿' 
                 });
              }
           });
        }
     });
+
+    if (threeGoatsGrowthGain > 0 && currentArtifacts.some(a => a.id === 'three_goats')) {
+       const gain = Math.round(threeGoatsGrowthGain * 100) / 100;
+       setArtifacts(prev => prev.map(a => {
+          if (a.id === 'three_goats') {
+             const nextGrowth = Math.round(((a.data?.growth || 0) + gain) * 100) / 100;
+             return { ...a, data: { ...a.data, growth: nextGrowth } };
+          }
+          return a;
+       }));
+    }
 
     if (context.grid.some(s => s.id === 'ruby') && currentArtifacts.some(a=>a.id==='crown')) {
        queue.push({ type: 'multiplier', indices: [0,1,2,3,4,5,6,7,8], factor: 2, name: '宝石皇冠' });
@@ -558,15 +603,16 @@ function App() {
     // PASS 2: Active triggers
     currentArtifacts.forEach(art => {
       if (art.effect) {
-         const tempCtx = { chips: 0, mult: 0 }; 
+         const tempCtx = { chips: 0, mult: 0, fan: 0 };
          const msg = art.effect(tempCtx, art.data, currentArtifacts.length, deck.length, deck);
          
-         if (tempCtx.chips > 0 || tempCtx.mult > 0) {
+         if (tempCtx.chips > 0 || tempCtx.mult > 0 || tempCtx.fan > 0) {
             queue.push({
                type: 'artifact',
                id: art.id, 
                addChips: tempCtx.chips,
                addMult: tempCtx.mult,
+               addFan: tempCtx.fan,
                name: art.name
             });
          }
@@ -579,7 +625,7 @@ function App() {
     }
 
     setScoringQueue(queue);
-    setHandResult({ chips: 0, mult: 1, total: 0, gold: 0 });
+    setHandResult({ chips: 0, mult: 1, fan: 1, total: 0, gold: 0 });
   };
 
   const resolveRound = () => {
@@ -619,10 +665,10 @@ function App() {
            showToast("目标达成！进入商店", "success");
            setTimeout(() => {
                setGameState('SHOP');
-               generateShop(true); 
-           }, 1000);
+               generateShop(true);
+           }, 1000 / animSpeed);
        } else {
-           setTimeout(() => setGameState('SUMMARY'), 500);
+           setTimeout(() => setGameState('SUMMARY'), 500 / animSpeed);
        }
     } else {
        if (newTotalScore >= targetScore && score < targetScore) { 
@@ -937,6 +983,7 @@ function App() {
     setGameStats({ totalHands: 0, bestHand: 0, worstHand: -1, totalGoldEarned: 0, globalTotalScore: 0, maxLevel: 1, totalRounds: 0, synergyCounts: {}, dimPocketCount: 0 });
     setGrid(Array(9).fill(null));
     setSummaryPage(0);
+    setAutoSpin(false);
   };
 
   const nextRound = () => {
@@ -1107,7 +1154,8 @@ function App() {
                                     <div className="text-[10px] leading-tight text-slate-300 line-clamp-2">{art.name}</div>
                                     <div className="absolute bottom-full mb-2 bg-slate-900 text-xs p-2 rounded border border-slate-700 whitespace-nowrap opacity-0 group-hover:opacity-100 pointer-events-none z-50">
                                         {art.desc}
-                                        {art.id === 'red_luck' && <div className="text-red-400 mt-1">成长: {art.data?.growth || 0}</div>}
+                                         {art.id === 'red_luck' && <div className="text-red-400 mt-1">成长: {art.data?.growth || 0}</div>}
+                                         {art.growthType === 'fan' && <div className="text-amber-300 mt-1">成长: +{formatNum(art.data?.growth || 0)}番</div>}
                                     </div>
                                 </div>
                              ))}
@@ -1222,7 +1270,7 @@ function App() {
       {/* --- 中央舞台 --- */}
       <div className="flex-1 h-full relative flex flex-col items-center justify-center p-8 bg-slate-950/50">
         
-        <div className={`absolute top-8 flex items-center gap-6 transition-all duration-300 ${gameState === 'SCORING' ? 'opacity-100 translate-y-0' : 'opacity-0 -translate-y-4'}`}>
+        <div className={`absolute top-8 flex items-center gap-4 transition-all duration-300 ${gameState === 'SCORING' ? 'opacity-100 translate-y-0' : 'opacity-0 -translate-y-4'}`}>
            <div className="flex flex-col items-center">
               <div className={`text-4xl font-black drop-shadow-lg transition-transform ${currentAnimEvent?.addChips ? 'scale-125 text-white' : 'text-blue-400 scale-100'}`}>
                 {handResult.chips}
@@ -1232,9 +1280,16 @@ function App() {
            <div className="text-slate-600 text-2xl font-black">X</div>
            <div className="flex flex-col items-center">
               <div className={`text-4xl font-black drop-shadow-lg transition-transform ${currentAnimEvent?.addMult || currentAnimEvent?.type === 'multiplier' ? 'scale-125 text-white' : 'text-red-500 scale-100'}`}>
-                {handResult.mult}
+                {formatNum(handResult.mult)}
               </div>
               <div className="text-[10px] text-red-300 font-bold tracking-widest uppercase">Mult</div>
+           </div>
+           <div className="text-slate-600 text-2xl font-black">X</div>
+           <div className="flex flex-col items-center">
+              <div className={`text-4xl font-black drop-shadow-lg transition-transform ${currentAnimEvent?.addFan ? 'scale-125 text-white' : 'text-amber-400 scale-100'}`}>
+                {formatNum(handResult.fan)}
+              </div>
+              <div className="text-[10px] text-amber-300 font-bold tracking-widest uppercase">Fan</div>
            </div>
            <div className="text-slate-600 text-2xl font-black">=</div>
            <div className="text-6xl font-black text-white drop-shadow-[0_0_20px_rgba(255,255,255,0.4)] animate-pulse">
@@ -1247,7 +1302,7 @@ function App() {
               <div className="text-5xl font-black text-transparent bg-clip-text bg-gradient-to-r from-yellow-300 via-orange-400 to-red-500 drop-shadow-[0_4px_0_rgba(0,0,0,0.5)] tracking-tighter">
                  {currentAnimEvent.name}
               </div>
-              <div className="text-center text-white font-bold text-xl mt-1 drop-shadow-md">倍率 +{currentAnimEvent.addMult}</div>
+              <div className="text-center text-white font-bold text-xl mt-1 drop-shadow-md">番数 +{formatNum(currentAnimEvent.addFan)}</div>
            </div>
         )}
 
@@ -1387,7 +1442,8 @@ function App() {
                       <div className="absolute top-full right-0 mt-2 w-48 bg-slate-950 text-slate-300 text-xs p-3 rounded-lg border border-slate-700 shadow-xl opacity-0 group-hover:opacity-100 pointer-events-none z-50">
                         <div className="font-bold text-white mb-1">{art.name}</div>
                         {art.desc}
-                        {art.isGrowth && <div className="text-green-400 mt-1">当前加成: +{art.data?.growth || 0}x</div>}
+                        {art.isGrowth && art.growthType !== 'fan' && <div className="text-green-400 mt-1">当前加成: +{art.data?.growth || 0}x</div>}
+                        {art.growthType === 'fan' && <div className="text-amber-300 mt-1">当前加成: +{formatNum(art.data?.growth || 0)}番</div>}
                         {/* Dynamic Magic Box Display */}
                         {art.id === 'magic_box' && <div className="text-blue-300 mt-1">当前: +{deck.length * 2}x</div>}
                         {/* More is Better Display */}
@@ -1473,13 +1529,13 @@ function App() {
                   </div>
                 )}
 
-                <button 
+                <button
                   onClick={spin}
                   disabled={gameState !== 'IDLE' || magicMode !== null || spinsLeft <= 0}
                   className={`
                     w-full py-6 text-2xl font-black rounded-2xl shadow-xl border-b-8 transition-all flex items-center justify-center gap-4 group
                     ${gameState === 'IDLE' && !magicMode && spinsLeft > 0
-                      ? 'bg-gradient-to-br from-amber-400 to-orange-500 hover:from-amber-300 hover:to-orange-400 border-orange-700 text-white active:border-b-0 active:translate-y-2' 
+                      ? 'bg-gradient-to-br from-amber-400 to-orange-500 hover:from-amber-300 hover:to-orange-400 border-orange-700 text-white active:border-b-0 active:translate-y-2'
                       : 'bg-slate-800 border-slate-900 text-slate-500 cursor-not-allowed'}
                   `}
                 >
@@ -1492,6 +1548,34 @@ function App() {
                      </>
                   )}
                 </button>
+
+                <div className="flex gap-2 mt-2">
+                  <button
+                    onClick={() => {
+                      const speeds = [1, 2, 4];
+                      const next = speeds[(speeds.indexOf(animSpeed) + 1) % speeds.length];
+                      setAnimSpeed(next);
+                      animSpeedRef.current = next;
+                    }}
+                    className={`flex-1 py-2.5 rounded-xl text-sm font-bold border-b-4 transition-all active:border-b-0 active:translate-y-1 ${
+                      animSpeed > 1
+                        ? 'bg-cyan-700 border-cyan-900 text-cyan-200'
+                        : 'bg-slate-700 border-slate-800 text-slate-400'
+                    }`}
+                  >
+                    ×{animSpeed}
+                  </button>
+                  <button
+                    onClick={() => setAutoSpin(v => !v)}
+                    className={`flex-1 py-2.5 rounded-xl text-sm font-bold border-b-4 transition-all active:border-b-0 active:translate-y-1 ${
+                      autoSpin
+                        ? 'bg-green-600 border-green-800 text-white'
+                        : 'bg-slate-700 border-slate-800 text-slate-400'
+                    }`}
+                  >
+                    {autoSpin ? 'AUTO ●' : 'AUTO'}
+                  </button>
+                </div>
              </div>
            )}
         </div>
